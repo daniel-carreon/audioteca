@@ -6,9 +6,32 @@
 /** Las descargas y fichas de antes de v2 no traían voz: entonces solo existía una voz (la de macOS en esta versión). */
 export const VOZ_V1 = 'macos'
 
+
+/** Capítulos narrados por voz. Sirve con la ficha (capitulos[].narraciones) y con la lista (versiones: [n, v, voz]). */
+function capitulosPorVoz(ficha) {
+  const cuenta = {}
+  if (Array.isArray(ficha.capitulos)) {
+    for (const c of ficha.capitulos) for (const v of Object.keys(c.narraciones || {})) cuenta[v] = (cuenta[v] || 0) + 1
+  } else {
+    for (const [, , v] of ficha.versiones || []) if (v) cuenta[v] = (cuenta[v] || 0) + 1
+  }
+  return cuenta
+}
+
+/** Lo que suena si no elegiste voz para ese libro: la voz preferida (AUDIOTECA_VOZ_PREFERIDA, llega en la ficha como
+ *  `voz_preferida`) cuando la tiene narrada al menos tanto como la voz del libro (así no se brinca de voz entre
+ *  capítulos); si no, la voz del libro. Una voz elegida a mano siempre manda. */
+export function vozPorOmision(ficha) {
+  const preferida = ficha.voz_preferida
+  if (!preferida) return ficha.voz
+  const cuenta = capitulosPorVoz(ficha)
+  const pref = cuenta[preferida] || 0
+  return pref > 0 && pref >= (cuenta[ficha.voz] || 0) ? preferida : ficha.voz
+}
+
 /** La ficha vista con la voz elegida: campos planos (audio, duracion, bytes, v, voz) de lo que va a sonar. */
 export function conVoz(ficha, elegida) {
-  const voz = elegida || ficha.voz
+  const voz = elegida || vozPorOmision(ficha)
   const capitulos = ficha.capitulos.map((c) => {
     const narr = c.narraciones || (c.audio ? { [c.voz || ficha.voz || VOZ_V1]: { d: c.duracion, b: c.bytes, v: c.v } } : {})
     const v = [voz, ficha.voz, ...Object.keys(narr)].find((x) => x && narr[x]) || null

@@ -25,6 +25,8 @@ Audioteca · tus libros como audiolibros en español, con IA local en tu Mac
         Narra lo pendiente (todo, o un libro). --vigilar se queda esperando libros nuevos.
   ./audioteca voz listar | base | clonar <nombre> <audio> "<transcripción>" | probar <voz> ["frase"]
         Voces: macos (siempre), qwen-clon (genérica, `voz base`) y la tuya (`voz clonar`).
+  ./audioteca palabras [--dry-run] [--solo <slug> --caps 1,2]
+        Tiempos exactos por palabra (Qwen3-ForcedAligner, local) para que el lector siga la voz palabra a palabra.
   ./audioteca servir
         Abre la app en tu red local: entra desde el iPhone a la URL que imprime.
   ./audioteca estado            Libros, voces y lo que se está narrando.
@@ -107,6 +109,7 @@ case "$orden" in
   voz|voces)      necesita_python; exec "$PY" "$P/voces.py" "$@" ;;
   estado)         necesita_python; "$PY" "$P/biblioteca.py"; exec "$PY" "$P/narrar.py" --plan ;;
   servir|app)     exec node "$DIR/app/server/index.mjs" "$@" ;;
+  palabras)       necesita_python; exec "$PY" -I "$DIR/app/scripts/palabras/alinear.py" "$@" ;;
   servidor-traduccion) necesita_python; exec "$PY" "$P/servidor_traduccion.py" "$@" ;;
   demo)
     necesita_python
