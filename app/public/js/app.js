@@ -178,7 +178,7 @@ async function vistaBiblioteca(mio) {
                   <div class="barra"><i style="width:${(fraccionDe(ficha, p) * 100).toFixed(1)}%"></i></div>
                   <div class="resta num" style="margin-top:7px">${duracionHumana(resto / vel)} restantes · ${velTexto(vel)}</div>
                 </div>
-                <button class="play-redondo" data-continuar="${esc(ultimo.slug)}" aria-label="Reproducir">${R.elemento.paused || R.estado.libro?.slug !== ultimo.slug ? icono.play : icono.pausa}</button>
+                <button class="play-redondo" data-continuar="${esc(ultimo.slug)}" aria-label="${sonandoLibro(ultimo.slug) ? 'Pausa' : 'Reproducir'}">${sonandoLibro(ultimo.slug) ? icono.pausa : icono.play}</button>
               </div>
             </div>
           </section>`
@@ -239,8 +239,20 @@ async function vistaBiblioteca(mio) {
   } else await pintar()
   fusionarProgresoRemoto().then((cambio) => { if (cambio) pintar().catch(() => {}) })
   sincronizarPendientes()
-  return refrescoPeriodico(pintar)
+  // El botón de «Continuar» sigue al reproductor: sin esto se quedaba en play mientras el libro sonaba
+  // (y como esa tarjeta oculta el mini, era el único botón a la vista; 2 nov).
+  const pintarContinuar = () => {
+    const b = vista.querySelector('[data-continuar]')
+    if (!b) return
+    const sonando = sonandoLibro(b.dataset.continuar)
+    b.innerHTML = sonando ? icono.pausa : icono.play
+    b.setAttribute('aria-label', sonando ? 'Pausa' : 'Reproducir')
+  }
+  const quitar = [R.on('estado', pintarContinuar), R.on('capitulo', pintarContinuar), refrescoPeriodico(pintar)]
+  return () => quitar.forEach((q) => q())
 }
+
+const sonandoLibro = (slug) => R.estado.libro?.slug === slug && !R.elemento.paused
 
 /** Mientras la vista está abierta, refresca al volver a la app y cada minuto: el narrador sigue trabajando. */
 function refrescoPeriodico(pintar) {

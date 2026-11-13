@@ -256,6 +256,15 @@ try {
   await pagina.waitForSelector('.continuar')
   ok('biblioteca muestra «Continuar» con el último libro', (await pagina.textContent('.continuar h2')).includes('Don Quijote de prueba'))
   await foto('09-biblioteca-continuar')
+  // El botón de «Continuar» sigue al reproductor (2 nov: sonaba y seguía mostrando play).
+  await pagina.click('[data-continuar]')
+  await pagina.waitForFunction(() => !document.getElementById('audio').paused)
+  await pagina.waitForFunction(() => document.querySelector('[data-continuar]').getAttribute('aria-label') === 'Pausa', null, { timeout: 3000 }).catch(() => {})
+  ok('«Continuar» muestra pausa mientras suena', (await pagina.getAttribute('[data-continuar]', 'aria-label')) === 'Pausa')
+  await pagina.click('[data-continuar]')
+  await pagina.waitForFunction(() => document.getElementById('audio').paused)
+  await pagina.waitForFunction(() => document.querySelector('[data-continuar]').getAttribute('aria-label') === 'Reproducir', null, { timeout: 3000 }).catch(() => {})
+  ok('«Continuar» vuelve a play al pausar', (await pagina.getAttribute('[data-continuar]', 'aria-label')) === 'Reproducir')
 
   // 12. Descarga y modo avión
   const sw = await pagina.evaluate(async () => { const r = await navigator.serviceWorker?.ready; return !!r?.active })
