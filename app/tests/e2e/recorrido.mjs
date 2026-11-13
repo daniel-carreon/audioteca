@@ -53,7 +53,8 @@ const ok = (nombre, cond, detalle = '') => {
 const espera = (ms) => new Promise((r) => setTimeout(r, ms))
 
 const motor = process.env.E2E_MOTOR === 'chromium' ? chromium : webkit
-const navegador = await motor.launch()
+// Silencio también a nivel de proceso: Chromium arranca con --mute-audio (además del volumen 0 de abajo).
+const navegador = await motor.launch(motor === chromium ? { args: ['--mute-audio'] } : {})
 const contexto = await navegador.newContext({ ...devices['iPhone 15 Pro Max'], ...(motor === chromium ? { isMobile: true } : {}), serviceWorkers: 'allow', locale: 'es-MX' })
 // Espía de Media Session: registra handlers y el último setPositionState para poder verificarlos.
 await contexto.addInitScript(() => {
@@ -244,7 +245,10 @@ try {
   const kObj = Number(await objetivo.getAttribute('data-w'))
   const t0Obj = await enAudio((k) => window.__lector.palabras()[k][0], kObj)
   await objetivo.click()
-  const tras = await enAudio(() => ({ t: document.getElementById('audio').currentTime, activa: window.__lector.activa(), lleva: window.__lector.lleva(), s: Number(document.querySelector('.seg.activa')?.dataset.s), sonando: !document.getElementById('audio').paused }))
+  // t y la palabra se leen al instante (a 2.5× el audio sigue); la oración se marca en «seeked», que llega después.
+  const tras = await enAudio(() => ({ t: document.getElementById('audio').currentTime, activa: window.__lector.activa(), lleva: window.__lector.lleva() }))
+  await pagina.waitForFunction(() => !document.getElementById('audio').seeking && document.querySelector('.seg.activa')?.dataset.s === '5', null, { timeout: 3000 }).catch(() => {})
+  Object.assign(tras, await enAudio(() => ({ s: Number(document.querySelector('.seg.activa')?.dataset.s), sonando: !document.getElementById('audio').paused })))
   ok('tocar una palabra salta el audio a su t0 (±0.25 s), la resalta y suena', Math.abs(tras.t - t0Obj) <= 0.25 && tras.activa === kObj && tras.lleva && tras.s === 5, `t=${tras.t.toFixed(3)} t0=${t0Obj} palabra ${tras.activa}/${kObj} oración ${tras.s}`)
   await pagina.waitForFunction(() => !document.getElementById('audio').paused, null, { timeout: 3000 }).catch(() => {})
   await foto('07-toque-palabra')
@@ -352,24 +356,34 @@ try {
   await pagina.click('.hoja [data-d="-2"]')
   await enAudio(() => window.__audioteca.R.play())
   await pagina.click('#hoja', { position: { x: 20, y: 20 } }) // cierra la hoja tocando el velo
-  await enAudio(() => window.__audioteca.R.irASegmento(9))
-  await espera(400)
-  const antesVoz = await enAudio(() => {
-    const au = document.getElementById('audio'); const R = window.__audioteca.R
-    return { t: au.currentTime, s: R.segmentoEn(au.currentTime), voz: R.estado.cap.voz, texto: document.querySelector('.seg.activa')?.textContent }
-  })
   await pagina.click('[data-accion="ajustes-lectura"]')
   await pagina.waitForSelector('.hoja .fila-voz')
   await pagina.click('.hoja .fila-voz')
   await pagina.waitForSelector('.hoja [data-h="elegir:lector"]')
   await foto('13-hoja-voces')
-  await pagina.click('.hoja [data-h="elegir:lector"]')
-  await pagina.waitForFunction(() => window.__audioteca.R.estado.cap?.voz === 'lector' && !document.getElementById('audio').paused && document.querySelector('.seg.activa'), null, { timeout: 15000 })
-  await espera(300)
+  // La oración 9 dura 0.6 s a 2.5×: abrir la hoja y la captura tardan más que eso, así que el salto a la oración,
+  // la lectura de «antes» y el toque en la voz van en el mismo instante, y la primera oración que suena con la voz
+  // nueva se anota en el primer cuadro en que ya suena (no tras una espera en la que el audio sigue avanzando).
+  const antesVoz = await enAudio(() => {
+    const au = document.getElementById('audio'); const R = window.__audioteca.R
+    R.irASegmento(9)
+    const antes = { t: au.currentTime, s: R.segmentoEn(au.currentTime), voz: R.estado.cap.voz, texto: document.querySelector('.seg.activa')?.textContent }
+    window.__trasVoz = null
+    const mirar = () => {
+      const t = au.currentTime
+      if (R.estado.cap?.voz === 'lector' && R.estado.cap.segmentos.length && !au.paused && !au.seeking && t > 0.5 && R.segmentoEn(t) === R.estado.segmento && document.querySelector('.seg.activa')) {
+        const s = R.segmentoEn(t)
+        window.__trasVoz = { t, s, seg: R.estado.cap.segmentos[s], texto: document.querySelector('.seg.activa').textContent }
+      } else requestAnimationFrame(mirar)
+    }
+    requestAnimationFrame(mirar)
+    document.querySelector('.hoja [data-h="elegir:lector"]').click()
+    return antes
+  })
+  await pagina.waitForFunction(() => window.__trasVoz, null, { timeout: 15000 })
   const trasVoz = await enAudio(() => {
     const au = document.getElementById('audio'); const R = window.__audioteca.R
-    const s = R.segmentoEn(au.currentTime)
-    return { t: au.currentTime, s, voz: R.estado.cap.voz, seg: R.estado.cap.segmentos[s], texto: document.querySelector('.seg.activa')?.textContent, rate: au.playbackRate, guardada: JSON.parse(localStorage.getItem('audioteca.progreso'))['prueba-audioteca'].voz }
+    return { ...window.__trasVoz, voz: R.estado.cap.voz, rate: au.playbackRate, guardada: JSON.parse(localStorage.getItem('audioteca.progreso'))['prueba-audioteca'].voz }
   })
   ok('cambiar de voz sigue en la MISMA oración con la voz nueva (y conserva la velocidad)', trasVoz.voz === 'lector' && trasVoz.texto === antesVoz.texto && Math.abs(trasVoz.t - antesVoz.t) > 0.3 && Math.abs(trasVoz.rate - 2.5) < 0.01,
     `«${antesVoz.texto}» ${antesVoz.voz} t=${antesVoz.t.toFixed(2)} → ${trasVoz.voz} t=${trasVoz.t.toFixed(2)} [${trasVoz.seg}] «${trasVoz.texto}»`)
