@@ -121,6 +121,23 @@ test('biblioteca tolera ruido y reporta capítulos narrados', async () => {
   assert.ok(!JSON.stringify(ficha).includes(libros), 'no filtra rutas del disco')
 })
 
+test('portada: la que nombra libro.json o, si no nombra ninguna, portada.jpg de la carpeta', async () => {
+  const sin = (await (await pedir('/api/libros')).json()).libros.find((x) => x.slug === 'libro-v1')
+  assert.equal(sin.portada, null)
+  assert.equal((await pedir('/api/libros/libro-v1/portada')).status, 404)
+  writeFileSync(join(libros, 'libro-v1', 'portada.jpg'), 'JPEG')
+  const con = (await (await pedir('/api/libros')).json()).libros.find((x) => x.slug === 'libro-v1')
+  assert.match(con.portada, /^portada\?v=/)
+  const r = await pedir('/api/libros/libro-v1/portada')
+  assert.equal(r.status, 200)
+  assert.equal(await r.text(), 'JPEG')
+  const ruta = join(libros, 'libro-v1', 'libro.json')
+  const meta = JSON.parse(readFileSync(ruta, 'utf8'))
+  writeFileSync(ruta, JSON.stringify({ ...meta, portada: 'otra.png' }))   // nombra una que no existe: no cae a portada.jpg
+  assert.equal((await pedir('/api/libros/libro-v1/portada')).status, 404)
+  writeFileSync(ruta, JSON.stringify(meta))
+})
+
 test('varias voces: cada capítulo trae sus narraciones y la ficha la sección «Voces»', async () => {
   const ficha = await (await pedir('/api/libros/prueba-audioteca')).json()
   assert.equal(ficha.voz, 'lectora')

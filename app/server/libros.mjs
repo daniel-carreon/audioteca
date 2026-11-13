@@ -78,6 +78,13 @@ function duracionDe(c, narr) {
 }
 
 /** Ficha pública de un libro (lo que el teléfono necesita; nunca rutas del disco). */
+// La de «portada» en libro.json; si no la nombra, `portada.jpg` de la carpeta (la que se deja antes de que el
+// traductor escriba libro.json, que conserva campos pero no la agrega).
+export function archivoPortada(dir, meta) {
+  const nombre = meta.portada === undefined ? 'portada.jpg' : meta.portada
+  return typeof nombre === 'string' && /^[\w.-]+\.(jpe?g|png|webp)$/i.test(nombre) && existsSync(join(dir, nombre)) ? nombre : null
+}
+
 export function leerLibro(raiz, slug) {
   if (!SLUG.test(slug)) return null
   const dir = join(raiz, slug)
@@ -113,8 +120,7 @@ export function leerLibro(raiz, slug) {
       narraciones: narr,
     }
   }).sort((a, b) => a.n - b.n)
-  const portada = typeof meta.portada === 'string' && /^[\w.-]+\.(jpe?g|png|webp)$/i.test(meta.portada) && existsSync(join(dir, meta.portada))
-    ? meta.portada : null
+  const portada = archivoPortada(dir, meta)
   const stPortada = portada ? stat(join(dir, portada)) : null
   return {
     slug,

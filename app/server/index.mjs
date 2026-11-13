@@ -9,7 +9,7 @@ import { createReadStream, readFileSync, statSync, writeFileSync, renameSync, mk
 import { join, dirname, extname, posix } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
-import { listarLibros, leerLibro, leerCapitulo, rutaAudio, SLUG, NN, VOZ } from './libros.mjs'
+import { listarLibros, leerLibro, leerCapitulo, rutaAudio, archivoPortada, SLUG, NN, VOZ } from './libros.mjs'
 import { crearVoces } from './voces.mjs'
 import { crearEstaticos, comprimir, TIPOS } from './estaticos.mjs'
 import { COOKIE, cargarSecreto, emitir, verificar, leerCookies, cookieSesion, limitador, huella, contraseñaCorrecta } from './sesion.mjs'
@@ -262,9 +262,10 @@ export function crearServidor(cfg = configDesdeEntorno()) {
     m = /^\/api\/libros\/([^/]+)\/portada$/.exec(ruta)
     if (m) {
       const libro = leerLibro(cfg.libros, m[1])
-      if (!libro?.portada) return responder(res, 404, { error: 'sin portada' })
-      const meta = JSON.parse(readFileSync(join(cfg.libros, m[1], 'libro.json'), 'utf8'))
-      return servirArchivo(req, res, join(cfg.libros, m[1], meta.portada), { cache: 'private, max-age=86400' })
+      const dir = join(cfg.libros, m[1])
+      const archivo = libro?.portada && archivoPortada(dir, JSON.parse(readFileSync(join(dir, 'libro.json'), 'utf8')))
+      if (!archivo) return responder(res, 404, { error: 'sin portada' })
+      return servirArchivo(req, res, join(dir, archivo), { cache: 'private, max-age=86400' })
     }
     m = /^\/api\/libros\/([^/]+)\/glosario$/.exec(ruta)
     if (m) {
