@@ -7,7 +7,10 @@
 //    reproducir y adelantar). Si no, puede venir el arranque precargado (los primeros ~45 s del capítulo
 //    siguiente, que el reproductor pide antes de que acabe el actual) y el resto de la red.
 //  · Nunca borra `audioteca-libros-*` (tus descargas) al actualizarse.
-const VERSION = 'v7-2026-10-16'
+//  · Un capítulo descargado se alinea palabra a palabra después (el trabajo de palabras va por detrás del narrador):
+//    si con red llega su texto con "palabras" más completa y los MISMOS segmentos (mismo audio), se actualiza la copia
+//    descargada, así sin red también se lee palabra a palabra.
+const VERSION = 'v8-2026-11-10'
 const SHELL = 'audioteca-shell-v2'
 const DATOS = 'audioteca-datos-v1'
 const LIBROS = 'audioteca-libros-v1'
@@ -100,7 +103,10 @@ async function datos(request, ev) {
       fetch(request),
       new Promise((_, mal) => setTimeout(() => mal(new Error('lenta')), ESPERA_RED_MS)),
     ])
-    if (r.ok) ev.waitUntil(cache.put(request, r.clone()))
+    if (r.ok) {
+      ev.waitUntil(cache.put(request, r.clone()))
+      if (/\/api\/libros\/[^/]+\/capitulos\/\d+$/.test(new URL(request.url).pathname)) ev.waitUntil(mejorarDescarga(request, r.clone()).catch(() => {}))
+    }
     return r
   } catch (e) {
     const guardada = await desdeCache()
@@ -109,6 +115,18 @@ async function datos(request, ev) {
     if (e.message === 'lenta') return fetch(request)
     return new Response(JSON.stringify({ error: 'Sin conexión' }), { status: 503, headers: { 'content-type': 'application/json' } })
   }
+}
+
+/** Si este capítulo está descargado y la red trae más palabras alineadas para el mismo audio, reemplaza la copia. */
+async function mejorarDescarga(request, r) {
+  const libros = await caches.open(LIBROS)
+  const vieja = await libros.match(request)
+  if (!vieja) return
+  const [antes, ahora] = await Promise.all([vieja.json(), r.clone().json()])
+  const n = (d) => (Array.isArray(d?.palabras) ? d.palabras.length : 0)
+  if (n(ahora) <= n(antes)) return
+  if (JSON.stringify(antes.segmentos || []) !== JSON.stringify(ahora.segmentos || [])) return // otro audio: no se toca
+  await libros.put(request, r)
 }
 
 async function audio(request) {

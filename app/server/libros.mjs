@@ -8,6 +8,7 @@
 // a ese capítulo, la primera otra voz que lo tenga.
 import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 import { alinearCapitulo } from './alinear.mjs'
 
 export const SLUG = /^[a-z0-9][a-z0-9-]{0,120}$/
@@ -78,6 +79,13 @@ function duracionDe(c, narr) {
 }
 
 /** Ficha pública de un libro (lo que el teléfono necesita; nunca rutas del disco). */
+// La de «portada» en libro.json; si no la nombra, `portada.jpg` de la carpeta (la que se deja antes de que el
+// traductor escriba libro.json, que conserva campos pero no la agrega).
+export function archivoPortada(dir, meta) {
+  const nombre = meta.portada === undefined ? 'portada.jpg' : meta.portada
+  return typeof nombre === 'string' && /^[\w.-]+\.(jpe?g|png|webp)$/i.test(nombre) && existsSync(join(dir, nombre)) ? nombre : null
+}
+
 export function leerLibro(raiz, slug) {
   if (!SLUG.test(slug)) return null
   const dir = join(raiz, slug)
@@ -113,8 +121,7 @@ export function leerLibro(raiz, slug) {
       narraciones: narr,
     }
   }).sort((a, b) => a.n - b.n)
-  const portada = typeof meta.portada === 'string' && /^[\w.-]+\.(jpe?g|png|webp)$/i.test(meta.portada) && existsSync(join(dir, meta.portada))
-    ? meta.portada : null
+  const portada = archivoPortada(dir, meta)
   const stPortada = portada ? stat(join(dir, portada)) : null
   return {
     slug,
@@ -154,9 +161,39 @@ export function rutaAudio(raiz, slug, n, voz = null) {
 }
 
 const cacheCapitulos = new Map()
+const cacheSha = new Map() // ruta → { mtimeMs, size, sha }
 
-/** Texto del capítulo alineado con los segmentos de una voz (cacheado por mtime de ambos archivos). */
-export function leerCapitulo(raiz, slug, n, voz = null) {
+/** sha1 (16 hex) del contenido de un archivo, cacheado por mtime y tamaño. */
+function sha16(ruta, st) {
+  const previo = cacheSha.get(ruta)
+  if (previo && previo.mtimeMs === st.mtimeMs && previo.size === st.size) return previo.sha
+  let sha = null
+  try { sha = createHash('sha1').update(readFileSync(ruta)).digest('hex').slice(0, 16) } catch { return null }
+  cacheSha.set(ruta, { mtimeMs: st.mtimeMs, size: st.size, sha })
+  return sha
+}
+
+export const rutaPalabras = (datos, slug, voz, nn) => join(datos, 'palabras', slug, voz, `${nn}.json`)
+
+/**
+ * Palabras alineadas vigentes de una narración (`<datos>/palabras/<slug>/<voz>/<NN>.json`, ver
+ * scripts/palabras/alinear.py): sus segmentos si su «fuente» coincide con el json y el mp3 de hoy; si no, null.
+ */
+export function palabrasVigentes(datos, slug, voz, nn, narr) {
+  if (!datos || !narr) return null
+  const p = leerJson(rutaPalabras(datos, slug, voz, nn))
+  if (!p || p.v !== 1 || !Array.isArray(p.segmentos) || !p.fuente) return null
+  const stJson = stat(narr.json)
+  const stMp3 = stat(narr.mp3)
+  if (!stJson || !stMp3 || p.fuente.mp3 !== stMp3.size || p.fuente.json !== sha16(narr.json, stJson)) return null
+  return p.segmentos
+}
+
+/**
+ * Texto del capítulo alineado con los segmentos de una voz (cacheado por mtime de texto, segmentos, mp3 y
+ * palabras). Con `datos`, agrega «palabras» ([] sin alineación vigente; entonces avisa con `pedir`).
+ */
+export function leerCapitulo(raiz, slug, n, voz = null, { datos = null, pedir = null } = {}) {
   if (!SLUG.test(slug) || !NN.test(n) || (voz !== null && !VOZ.test(voz))) return null
   const dir = join(raiz, slug)
   const libro = leerLibro(raiz, slug)
@@ -167,13 +204,23 @@ export function leerCapitulo(raiz, slug, n, voz = null) {
   const rutaMd = join(dir, 'texto', `${n}.md`)
   const stMd = stat(rutaMd)
   const stSegs = narr ? stat(narr.json) : null
-  const clave = `${slug}/${n}/${v}`
-  const firma = `${stMd?.mtimeMs}:${stMd?.size}:${stSegs?.mtimeMs}:${stSegs?.size}`
+  const stPal = narr && datos ? stat(rutaPalabras(datos, slug, v, cap.nn)) : null
+  const clave = `${slug}/${n}/${v}/${datos ? 1 : 0}`
+  const firma = `${stMd?.mtimeMs}:${stMd?.size}:${stSegs?.mtimeMs}:${stSegs?.size}:${narr?.stMp3.size}:${stPal?.mtimeMs}:${stPal?.size}`
   const previo = cacheCapitulos.get(clave)
-  if (previo && previo.firma === firma) return previo.valor
+  if (previo && previo.firma === firma) {
+    if (previo.sinPalabras && pedir) pedir({ slug, voz: v, nn: cap.nn })
+    return previo.valor
+  }
   const md = stMd ? readFileSync(rutaMd, 'utf8') : `# ${cap.titulo}\n`
-  const segmentos = narr ? (leerJson(narr.json)?.segmentos || []).filter((s) => s && typeof s.texto === 'string') : []
-  const { titulo, bloques } = alinearCapitulo(md, segmentos)
+  const crudos = narr ? leerJson(narr.json)?.segmentos || [] : []
+  const validos = []
+  crudos.forEach((s, i) => { if (s && typeof s.texto === 'string') validos.push(i) })
+  const segmentos = validos.map((i) => crudos[i])
+  // segmentos[i] del archivo de palabras ↔ segmentos[i] del json del narrador (sin filtrar).
+  const pal = narr && datos ? palabrasVigentes(datos, slug, v, cap.nn, narr) : null
+  const porSeg = pal && pal.length === crudos.length ? validos.map((i) => pal[i]) : null
+  const { titulo, bloques, palabras } = alinearCapitulo(md, segmentos, porSeg)
   const e = v ? cap.narraciones[v] : null
   const valor = {
     slug,
@@ -186,7 +233,10 @@ export function leerCapitulo(raiz, slug, n, voz = null) {
     duracion: e ? e.d : 0,
     bloques,
     segmentos: segmentos.map((s) => [Number(s.inicio) || 0, Number(s.fin) || 0]),
+    palabras,
   }
-  cacheCapitulos.set(clave, { firma, valor })
+  const sinPalabras = !!(narr && datos && !porSeg)
+  cacheCapitulos.set(clave, { firma, valor, sinPalabras })
+  if (sinPalabras && pedir) pedir({ slug, voz: v, nn: cap.nn })
   return valor
 }

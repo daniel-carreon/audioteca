@@ -11,6 +11,7 @@ let servidor, abierto, base, cookie
 const libros = mkdtempSync(join(tmpdir(), 'audioteca-libros-'))
 const narrador = mkdtempSync(join(tmpdir(), 'audioteca-narrador-'))
 const voces = mkdtempSync(join(tmpdir(), 'audioteca-voces-'))
+const datos = mkdtempSync(join(tmpdir(), 'audioteca-datos-'))
 
 function copiarFixture() {
   const origen = join(raiz, 'fixtures/libros/prueba-audioteca')
@@ -35,12 +36,14 @@ function copiarFixture() {
   mkdirSync(join(libros, 'roto'))
   writeFileSync(join(libros, 'roto', 'libro.json'), '{"slug": "roto", "capitu')
   writeFileSync(join(libros, '..', 'secreto-fuera.txt'), 'no debe salir')
+  // Palabras por palabra del libro de prueba (las escribe crear-fixture.mjs) solo para lectora: lector queda sin ellas.
+  cpSync(join(raiz, 'fixtures/palabras/prueba-audioteca/lectora'), join(datos, 'palabras/prueba-audioteca/lectora'), { recursive: true })
 }
 
 before(async () => {
   copiarFixture()
   servidor = crearServidor({
-    puerto: 0, host: '127.0.0.1', libros, narrador, voces, datos: mkdtempSync(join(tmpdir(), 'audioteca-datos-')), prefijo: '/audioteca',
+    puerto: 0, host: '127.0.0.1', libros, narrador, voces, datos, prefijo: '/audioteca',
     cookieSegura: true, contraseña: 'correcta',
   }).listen(0)
   await new Promise((r) => servidor.once('listening', r))
@@ -119,6 +122,23 @@ test('biblioteca tolera ruido y reporta capítulos narrados', async () => {
   const ficha = await (await pedir('/api/libros/prueba-audioteca')).json()
   assert.deepEqual(ficha.capitulos.map((c) => [c.n, c.audio, c.texto]), [[1, true, true], [2, true, true], [3, false, true]])
   assert.ok(!JSON.stringify(ficha).includes(libros), 'no filtra rutas del disco')
+})
+
+test('portada: la que nombra libro.json o, si no nombra ninguna, portada.jpg de la carpeta', async () => {
+  const sin = (await (await pedir('/api/libros')).json()).libros.find((x) => x.slug === 'libro-v1')
+  assert.equal(sin.portada, null)
+  assert.equal((await pedir('/api/libros/libro-v1/portada')).status, 404)
+  writeFileSync(join(libros, 'libro-v1', 'portada.jpg'), 'JPEG')
+  const con = (await (await pedir('/api/libros')).json()).libros.find((x) => x.slug === 'libro-v1')
+  assert.match(con.portada, /^portada\?v=/)
+  const r = await pedir('/api/libros/libro-v1/portada')
+  assert.equal(r.status, 200)
+  assert.equal(await r.text(), 'JPEG')
+  const ruta = join(libros, 'libro-v1', 'libro.json')
+  const meta = JSON.parse(readFileSync(ruta, 'utf8'))
+  writeFileSync(ruta, JSON.stringify({ ...meta, portada: 'otra.png' }))   // nombra una que no existe: no cae a portada.jpg
+  assert.equal((await pedir('/api/libros/libro-v1/portada')).status, 404)
+  writeFileSync(ruta, JSON.stringify(meta))
 })
 
 test('varias voces: cada capítulo trae sus narraciones y la ficha la sección «Voces»', async () => {
@@ -212,6 +232,24 @@ test('capítulo alineado: cada segmento cae en su texto', async () => {
   assert.equal(cap.segmentos.length, new Set(tramos.map((t) => t[1]).filter((s) => s >= 0)).size)
   const solo = await (await pedir('/api/libros/prueba-audioteca/capitulos/03')).json()
   assert.equal(solo.audio, false)
+})
+
+test('palabras exactas: cada [t0, t1, b, desde, hasta] pinta su palabra; sin alineación, [] y a la cola', async () => {
+  const cap = await (await pedir('/api/libros/prueba-audioteca/capitulos/01?voz=lectora')).json()
+  const alineadas = JSON.parse(readFileSync(join(datos, 'palabras/prueba-audioteca/lectora/01.json'), 'utf8')).segmentos.flat()
+  assert.equal(cap.palabras.length, alineadas.length)
+  const textos = cap.bloques.map((b) => b.tramos.map((t) => t[0]).join(''))
+  cap.palabras.forEach(([t0, t1, b, desde, hasta], k) => {
+    assert.equal(textos[b].slice(desde, hasta), alineadas[k][0])
+    assert.ok(t1 >= t0 && (k === 0 || t0 >= cap.palabras[k - 1][0]))
+  })
+  assert.deepEqual(cap.palabras[0].slice(2), [0, 0, 2]) // «El» del título
+  const juan = await (await pedir('/api/libros/prueba-audioteca/capitulos/01?voz=lector')).json()
+  assert.deepEqual(juan.palabras, [])
+  const cola = JSON.parse(readFileSync(join(datos, 'palabras/prioridad.json'), 'utf8'))
+  assert.deepEqual(cola.filter((e) => e.slug === 'prueba-audioteca'), [{ slug: 'prueba-audioteca', voz: 'lector', nn: '01' }])
+  const sinAudio = await (await pedir('/api/libros/prueba-audioteca/capitulos/03')).json()
+  assert.deepEqual(sinAudio.palabras, [])
 })
 
 test('audio con Range (206), suffix range y 416', async () => {

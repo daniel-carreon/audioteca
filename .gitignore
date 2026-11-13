@@ -14,6 +14,7 @@ voces/*
 
 # Generados por las pruebas
 app/fixtures/libros/
+app/fixtures/palabras/
 app/tests/e2e/salida/
 
 # Notas locales de entrega

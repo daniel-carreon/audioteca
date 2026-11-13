@@ -55,7 +55,20 @@ export async function cargar(slug, n, { t = null, reproducir = false, voz = unde
   const vozCap = (!navigator.onLine && (await vozDescargada(slug, cap))) || cap.voz
   const narr = cap.narraciones[vozCap]
   const p = progreso(slug)
-  const inicio = t ?? (p && p.cap === cap.n ? p.t : 0)
+  let inicio = t ?? (p && p.cap === cap.n ? p.t : 0)
+  // El minuto guardado se midió en una voz: con otra, ese segundo cae en otra oración (al cambiar la voz por
+  // omisión, un capítulo llegó a retomar 13 oraciones atrás). Se arranca ya en la
+  // proporción de las duraciones (sin perder el toque que iOS exige para sonar) y, en cuanto llegan los dos textos,
+  // se corrige a la MISMA oración, como al cambiar de voz a mano.
+  let corregir = null
+  if (t === null && inicio > 0.5) {
+    const vozT = vozDelTiempo(p, ficha)
+    const viejo = vozT !== vozCap ? cap.narraciones[vozT] : null
+    if (viejo) {
+      corregir = { voz: vozT, v: viejo.v, t: inicio }
+      if (viejo.d > 0 && narr.d > 0) inicio = Math.min(narr.d - 1, (inicio * narr.d) / viejo.d)
+    }
+  }
   const mismo = estado.libro?.slug === slug && estado.cap?.n === cap.n && estado.cap?.voz === vozCap && audio.src
   // El texto alineado se pide ya, pero el audio no lo espera.
   const datos = api.capitulo(slug, cap.n, vozCap, narr.v)
@@ -74,7 +87,7 @@ export async function cargar(slug, n, { t = null, reproducir = false, voz = unde
     irA(t)
   }
   aplicarVelocidad()
-  guardarProgreso(slug, { cap: cap.n, t: inicio, vel: velocidadActual, fin: false, ...(voz !== undefined ? { voz } : {}) })
+  guardarProgreso(slug, { cap: cap.n, t: inicio, vel: velocidadActual, fin: false, vozT: vozCap, ...(voz !== undefined ? { voz } : {}) })
   const sonar = reproducir ? play() : null
   actualizarSesionMedia()
   emitir('capitulo', estado)
@@ -85,6 +98,15 @@ export async function cargar(slug, n, { t = null, reproducir = false, voz = unde
       estado.cap = { ...d, ...capAhora, segmentos: d.segmentos, bloques: d.bloques, titulo: d.titulo || capAhora.titulo }
       estado.segmento = -1
       if (audio.readyState > 0) marcarSegmento(true)
+      if (corregir) {
+        const capViejo = await api.capitulo(slug, cap.n, corregir.voz, corregir.v).catch(() => null)
+        const ahora = audio.currentTime || busquedaPendiente || inicio
+        // Solo si nadie movió la posición mientras tanto (un toque, ±15/30, la barra).
+        if (capViejo && estado.cap?.n === capAhora.n && estado.cap?.voz === capAhora.voz && Math.abs(ahora - inicio) < 6) {
+          const exacto = tiempoEquivalente(capViejo, corregir.t, estado.cap)
+          if (Math.abs(exacto - inicio) > 0.3) irA(exacto + Math.max(0, ahora - inicio))
+        }
+      }
     }
   } catch (e) {
     if (estado.cap === capAhora && !navigator.onLine) avisar('Sin conexión: el texto de este capítulo no está en el teléfono')
@@ -94,9 +116,17 @@ export async function cargar(slug, n, { t = null, reproducir = false, voz = unde
   return estado
 }
 
+/** En qué voz se midió el `t` guardado: `vozT` desde el 10 nov; antes, la elegida a mano o la voz del libro. */
+function vozDelTiempo(p, ficha) {
+  return p?.vozT || p?.voz || ficha?.voz || null
+}
+
 /** Cambia la voz del libro. Si ese libro está sonando, sigue en la MISMA oración con la voz nueva. */
 export async function cambiarVoz(slug, voz) {
-  guardarProgreso(slug, { voz })
+  // Antes de cambiar la elegida, deja dicho en qué voz se midió el minuto guardado (la próxima carga lo traduce).
+  const p = progreso(slug)
+  const vozT = p && !p.vozT ? vozDelTiempo(p, estado.ficha?.slug === slug ? estado.ficha : api.libroGuardado(slug)) : null
+  guardarProgreso(slug, { voz, ...(vozT ? { vozT } : {}) })
   if (estado.libro?.slug !== slug || !estado.cap) return emitir('voz', voz)
   const viejo = estado.cap
   const { libro } = await fichaDe(slug, voz)
@@ -188,7 +218,7 @@ export function ponerVelocidad(v) {
   velocidadActual = v
   aplicarVelocidad()
   guardarPref('ultimaVel', v)
-  if (estado.libro) guardarProgreso(estado.libro.slug, { vel: v, cap: estado.cap?.n, t: audio.currentTime })
+  if (estado.libro) guardarProgreso(estado.libro.slug, { vel: v, cap: estado.cap?.n, t: audio.currentTime, ...(estado.cap?.voz ? { vozT: estado.cap.voz } : {}) })
   posicionSesion()
   emitir('velocidad', v)
 }
@@ -248,7 +278,7 @@ const arrancarBucle = () => { if (!rafId && !audio.paused && !document.hidden) r
 let ultimoGuardado = 0
 function guardarPosicion(sincronizar = false) {
   if (!estado.libro || !estado.cap || audio.readyState === 0) return
-  guardarProgreso(estado.libro.slug, { cap: estado.cap.n, t: audio.currentTime, vel: velocidadActual }, { sincronizar })
+  guardarProgreso(estado.libro.slug, { cap: estado.cap.n, t: audio.currentTime, vel: velocidadActual, vozT: estado.cap.voz }, { sincronizar })
   ultimoGuardado = Date.now()
 }
 
@@ -368,7 +398,8 @@ export async function prepararUltimo(slug) {
   if (estado.libro || !slug) return
   const p = progreso(slug)
   if (!p) return
-  try { await cargar(slug, p.cap, { t: p.t }) } catch { /* el libro pudo cambiar */ }
+  // Sin `t`: cargar retoma de p.t y, si ese minuto se midió en otra voz, lo traduce a la misma oración.
+  try { await cargar(slug, p.cap) } catch { /* el libro pudo cambiar */ }
 }
 
 export async function capitulosDescargados() {

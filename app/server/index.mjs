@@ -9,7 +9,7 @@ import { createReadStream, readFileSync, statSync, writeFileSync, renameSync, mk
 import { join, dirname, extname, posix } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
-import { listarLibros, leerLibro, leerCapitulo, rutaAudio, SLUG, NN, VOZ } from './libros.mjs'
+import { listarLibros, leerLibro, leerCapitulo, rutaAudio, archivoPortada, SLUG, NN, VOZ } from './libros.mjs'
 import { crearVoces } from './voces.mjs'
 import { crearEstaticos, comprimir, TIPOS } from './estaticos.mjs'
 import { COOKIE, cargarSecreto, emitir, verificar, leerCookies, cookieSesion, limitador, huella, contraseñaCorrecta } from './sesion.mjs'
@@ -32,6 +32,8 @@ export function configDesdeEntorno(env = entorno()) {
     // La cookie «Secure» solo viaja por HTTPS: en la red local (http) tiene que ir sin esa marca.
     cookieSegura: env.AUDIOTECA_COOKIE_SEGURA ? env.AUDIOTECA_COOKIE_SEGURA === '1' : !!(env.AUDIOTECA_TLS_CERT && env.AUDIOTECA_TLS_KEY),
     contraseña: env.AUDIOTECA_CONTRASENA || '',
+    // Voz que suena por omisión si la tiene narrada al menos tanto como la voz del libro (vacío = la del libro).
+    vozPreferida: env.AUDIOTECA_VOZ_PREFERIDA || '',
   }
 }
 
@@ -147,6 +149,35 @@ function almacenProgreso(ruta) {
   }
 }
 
+/**
+ * Cola de capítulos por alinear que lee el trabajo de palabras (scripts/palabras/alinear.py): lo que tú
+ * abre sin palabras vigentes va al frente de `<datos>/palabras/prioridad.json` y launchd (WatchPaths) despierta
+ * al trabajo. Atómica, sin duplicados, máximo 50; no reescribe lo mismo más de una vez por minuto.
+ */
+export function colaPalabras(datos, { max = 50, cada = 60_000 } = {}) {
+  const ruta = join(datos, 'palabras', 'prioridad.json')
+  const recientes = new Map()
+  return (e) => {
+    const clave = `${e.slug}/${e.voz}/${e.nn}`
+    const ahora = Date.now()
+    if (ahora - (recientes.get(clave) || 0) < cada) return
+    recientes.set(clave, ahora)
+    try {
+      let lista = []
+      try { lista = JSON.parse(readFileSync(ruta, 'utf8')) } catch { lista = [] }
+      if (!Array.isArray(lista)) lista = []
+      if (lista.some((x) => x && x.slug === e.slug && x.voz === e.voz && String(x.nn) === e.nn)) return
+      lista = [{ slug: e.slug, voz: e.voz, nn: e.nn }, ...lista].slice(0, max)
+      mkdirSync(dirname(ruta), { recursive: true })
+      const tmp = `${ruta}.${process.pid}.tmp`
+      writeFileSync(tmp, JSON.stringify(lista))
+      renameSync(tmp, ruta)
+    } catch (err) {
+      console.error(new Date().toISOString(), 'prioridad de palabras', err.message)
+    }
+  }
+}
+
 function validarProgreso(b) {
   const cap = Number(b?.cap)
   const t = Number(b?.t)
@@ -159,6 +190,8 @@ function validarProgreso(b) {
   if (Number.isFinite(vel) && vel >= 0.5 && vel <= 3.5) p.vel = vel
   if (b.fin === true) p.fin = true
   if (typeof b.voz === 'string' && VOZ.test(b.voz)) p.voz = b.voz
+  // En qué voz se midió `t` (10 nov): el mismo segundo cae en otra oración con otra voz.
+  if (typeof b.vozT === 'string' && VOZ.test(b.vozT)) p.vozT = b.vozT
   return p
 }
 
@@ -169,9 +202,10 @@ export function crearServidor(cfg = configDesdeEntorno()) {
   const voces = crearVoces({ voces: cfg.voces || join(cfg.datos, 'sin-voces'), narrador: cfg.narrador || join(cfg.datos, 'sin-narrador') })
   const h = huella(secreto, cfg.contraseña)
   const estaticos = crearEstaticos(PUBLICO)
+  const pedirPalabras = colaPalabras(cfg.datos)
   const fichaCompleta = (slug) => {
     const libro = leerLibro(cfg.libros, slug)
-    return libro && { ...libro, ...voces.deLibro(libro) }
+    return libro && { ...libro, ...voces.deLibro(libro), voz_preferida: cfg.vozPreferida || null }
   }
 
   // Sin contraseña configurada la app está abierta (red local de confianza).
@@ -235,6 +269,7 @@ export function crearServidor(cfg = configDesdeEntorno()) {
     if (ruta === '/api/libros') {
       const libros = listarLibros(cfg.libros).map(({ capitulos, ...resto }) => ({
         ...resto,
+        voz_preferida: cfg.vozPreferida || null,
         capitulos: capitulos.length,
         // Solo lo que la biblioteca necesita para pintar estado sin bajar cada ficha: [n, v, voz] de cada narración.
         versiones: capitulos.flatMap((c) => Object.entries(c.narraciones).map(([voz, x]) => [c.n, x.v, voz])),
@@ -249,7 +284,7 @@ export function crearServidor(cfg = configDesdeEntorno()) {
     m = /^\/api\/libros\/([^/]+)\/capitulos\/([^/]+)$/.exec(ruta)
     if (m) {
       const voz = url.searchParams.get('voz')
-      const cap = leerCapitulo(cfg.libros, m[1], m[2], voz || null)
+      const cap = leerCapitulo(cfg.libros, m[1], m[2], voz || null, { datos: cfg.datos, pedir: pedirPalabras })
       return cap ? responderDatos(req, res, cap) : responder(res, 404, { error: 'capítulo no encontrado' })
     }
     // audio/<voz>/NN.mp3 (v2) y audio/NN.mp3 (la narración por omisión de ese capítulo, como en v1).
@@ -262,9 +297,10 @@ export function crearServidor(cfg = configDesdeEntorno()) {
     m = /^\/api\/libros\/([^/]+)\/portada$/.exec(ruta)
     if (m) {
       const libro = leerLibro(cfg.libros, m[1])
-      if (!libro?.portada) return responder(res, 404, { error: 'sin portada' })
-      const meta = JSON.parse(readFileSync(join(cfg.libros, m[1], 'libro.json'), 'utf8'))
-      return servirArchivo(req, res, join(cfg.libros, m[1], meta.portada), { cache: 'private, max-age=86400' })
+      const dir = join(cfg.libros, m[1])
+      const archivo = libro?.portada && archivoPortada(dir, JSON.parse(readFileSync(join(dir, 'libro.json'), 'utf8')))
+      if (!archivo) return responder(res, 404, { error: 'sin portada' })
+      return servirArchivo(req, res, join(dir, archivo), { cache: 'private, max-age=86400' })
     }
     m = /^\/api\/libros\/([^/]+)\/glosario$/.exec(ruta)
     if (m) {

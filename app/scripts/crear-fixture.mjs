@@ -4,14 +4,19 @@
 // Texto: fragmentos del Quijote (Cervantes, 1605; dominio público) en oraciones cortas. Así los tests y el e2e no dependen del narrador.
 // Uso: node app/scripts/crear-fixture.mjs [--si-falta]  → app/fixtures/libros/prueba-audioteca/
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, writeFileSync, renameSync, unlinkSync, rmdirSync, readdirSync, mkdtempSync, existsSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { mkdirSync, writeFileSync, renameSync, unlinkSync, rmdirSync, readdirSync, mkdtempSync, existsSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 const raiz = join(dirname(fileURLToPath(import.meta.url)), '..')
 const destino = join(raiz, 'fixtures/libros/prueba-audioteca')
-if (process.argv.includes('--si-falta') && existsSync(join(destino, 'libro.json'))) process.exit(0)
+// Tiempos por palabra del libro de prueba (contrato de app/scripts/palabras/alinear.py): se reparten dentro de cada
+// oración en proporción a las letras de cada palabra. Son de prueba (el alineador real usa un modelo y aquí no hace
+// falta): sirven para que tests y e2e ejerzan el lector palabra a palabra sin descargar nada.
+const destinoPalabras = join(destino, '../../palabras/prueba-audioteca')
+if (process.argv.includes('--si-falta') && existsSync(join(destino, 'libro.json')) && existsSync(join(destinoPalabras, 'lectora', '01.json'))) process.exit(0)
 
 /** Voces de `say` en español instaladas en este Mac (Paulina y Mónica vienen con macOS). */
 function vocesSay() {
@@ -59,6 +64,20 @@ function duracion(archivo) {
   return Number(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', archivo]).toString().trim())
 }
 
+// Igual que el alineador: tokens por espacios, solo letras, dígitos y apóstrofo.
+const limpiar = (w) => [...w].filter((c) => c === "'" || /[\p{L}\p{N}]/u.test(c)).join('')
+function escribirPalabras(voz, nn, json, bytesMp3, segmentos) {
+  const porSeg = segmentos.map(({ texto, inicio, fin }) => {
+    const ws = texto.split(/\s+/).map(limpiar).filter(Boolean)
+    const total = ws.reduce((a, w) => a + w.length, 0) || 1
+    let t = inicio
+    return ws.map((w) => { const t0 = t; t += (fin - inicio) * w.length / total; return [w, +t0.toFixed(2), +t.toFixed(2)] })
+  })
+  const fuente = { json: createHash('sha1').update(json).digest('hex').slice(0, 16), mp3: bytesMp3 }
+  mkdirSync(join(destinoPalabras, voz), { recursive: true })
+  writeFileSync(join(destinoPalabras, voz, `${nn}.json`), JSON.stringify({ v: 1, modelo: 'fixture-proporcional', fuente, segmentos: porSeg }))
+}
+
 // Se sobrescribe archivo por archivo (sin borrados recursivos).
 mkdirSync(join(destino, 'texto'), { recursive: true })
 for (const v of VOCES) mkdirSync(join(destino, 'audio', v.id), { recursive: true })
@@ -91,7 +110,9 @@ capitulos.forEach((cap, idx) => {
     const mp3tmp = join(dir, `.${nn}.mp3.tmp`)
     execFileSync('ffmpeg', ['-y', '-v', 'error', '-f', 'concat', '-safe', '0', '-i', lista, '-ac', '1', '-b:a', '64k', '-f', 'mp3', mp3tmp])
     renameSync(mp3tmp, join(dir, `${nn}.mp3`))
-    writeFileSync(join(dir, `${nn}.json`), JSON.stringify({ duracion_s: +t.toFixed(2), voz: voz.id, segmentos }))
+    const json = JSON.stringify({ duracion_s: +t.toFixed(2), voz: voz.id, segmentos })
+    writeFileSync(join(dir, `${nn}.json`), json)
+    escribirPalabras(voz.id, nn, json, statSync(join(dir, `${nn}.mp3`)).size, segmentos)
     if (voz === VOCES[0]) Object.assign(entrada, { archivo_audio: `audio/${voz.id}/${nn}.mp3`, duracion_s: +t.toFixed(2) })
   }
   libro.capitulos.push(entrada)

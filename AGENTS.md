@@ -7,4 +7,8 @@
 - Escrituras atómicas (tmp → rename) y `libro.json` con candado (`.libro.lock`). Sin borrados recursivos.
 - Antes de entregar: `./audioteca check` (Node unit + Python + e2e WebKit). Si cambias `app/public/sw.js` en sí,
   sube su `VERSION`; el resto del shell se sella solo con hash de contenido.
+- Lector palabra a palabra: `app/public/js/lector-palabras.js` (cliente), `app/scripts/palabras/alinear.py` (tiempos
+  en `<datos>/palabras/<slug>/<voz>/NN.json`; `fuente` = sha1 del NN.json + bytes del mp3, distinta = vieja). El
+  fixture escribe tiempos de prueba proporcionales: no hace falta el modelo para las pruebas.
+- Las pruebas nunca suenan: el e2e silencia todo `<audio>` y `speechSynthesis`; no quites eso.
 - Íconos y splash: `node app/scripts/iconos.mjs` (la paleta vive en `:root` de `app/public/app.css`).

@@ -181,6 +181,7 @@ audio, el clon sale raro: corrige el `.txt` y vuelve a narrar.
 | `AUDIOTECA_TLS_CERT` / `AUDIOTECA_TLS_KEY` | vacíos | HTTPS propio |
 | `AUDIOTECA_VOZ` | `macos` (`qwen-clon` tras `setup.sh`) | voz de los libros nuevos |
 | `AUDIOTECA_VOZ_MACOS` / `AUDIOTECA_RITMO_MACOS` | primera en español / `180` | voz y palabras por minuto de `say` |
+| `AUDIOTECA_VOZ_PREFERIDA` | vacía | voz que la app pone por omisión si está narrada al menos tanto como la del libro |
 | `AUDIOTECA_PROCESOS` | `1` | narradores en paralelo (2 con 32 GB o más) |
 | `AUDIOTECA_MOTOR_TRADUCCION` | `gemma4-12b` | `gemma4-12b-qat` (mejor, 11 GB), `tgemma-4b` (ligero) |
 
@@ -189,6 +190,10 @@ Todo en [.env.example](.env.example). Las rutas pueden ser absolutas o relativas
 
 ## Más
 
+- `./audioteca palabras` calcula los tiempos exactos de cada palabra (Qwen3-ForcedAligner, local, ~0.6 GB) para que
+  el lector siga la voz palabra a palabra: una caja que se desliza con la palabra que suena, y tocar una palabra
+  salta el audio ahí. Sin tiempos, el lector sigue por oración. `--dry-run` lista lo pendiente; corre de nuevo cuando
+  narres algo nuevo (lo que abres en la app pasa al frente de la cola).
 - `./audioteca servidor-traduccion` levanta una API local compatible con LibreTranslate (`POST /translate`,
   EN→ES, con `glosario` opcional) para usar el traductor desde otras apps.
 - `./audioteca modelos` descarga los modelos por adelantado (útil antes de un viaje).
