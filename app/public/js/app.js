@@ -103,6 +103,15 @@ function estadoLibro(l) {
   return { clase: 'narrando', texto: `Texto listo · narración en cola` }
 }
 
+/** Cuándo quedó narrado completo (ms): la versión más nueva de sus capítulos (mtime en base 36). 0 si le falta alguno. */
+function terminadoEn(l) {
+  if (!l.capitulos || l.narrados !== l.capitulos || !l.versiones?.length) return 0
+  return Math.max(...l.versiones.map(([, v]) => parseInt(v, 36) || 0))
+}
+
+/** Terminado en los últimos 3 días y sin abrir (con más, todo lo no abierto diría «Nuevo»). */
+const esNuevo = (l) => !progreso(l.slug)?.ts && Date.now() - terminadoEn(l) < 3 * 864e5
+
 function fraccionDe(libro, p) {
   if (!p || !libro.capitulos?.length) return 0
   if (p.fin) return 1
@@ -141,7 +150,10 @@ async function vistaBiblioteca(mio) {
     librosCache = libros
     if (!vigente(mio)) return
     const progs = progresos()
-    const orden = [...libros].sort((a, b) => (progs[b.slug]?.ts || 0) - (progs[a.slug]?.ts || 0) || b.narrados - a.narrados || a.titulo.localeCompare(b.titulo))
+    // Lo más reciente arriba: lo último que escuchaste o, si nunca lo abriste, cuándo terminó de narrarse. Sin esto un
+    // libro recién terminado quedaba debajo de todos los ya empezados, fuera de la pantalla.
+    const reciente = (l) => progs[l.slug]?.ts || terminadoEn(l)
+    const orden = [...libros].sort((a, b) => reciente(b) - reciente(a) || b.narrados - a.narrados || a.titulo.localeCompare(b.titulo))
     const slugUltimo = ultimoLibro()
     const ultimo = libros.find((l) => l.slug === slugUltimo && l.narrados > 0)
     let continuar = ''
@@ -181,7 +193,8 @@ async function vistaBiblioteca(mio) {
           ${p ? `<div class="barra" data-fraccion="${esc(l.slug)}"><i style="width:0%"></i></div>` : ''}
           <h3>${esc(l.titulo)}</h3>
           <div class="autor">${esc(l.autor)}</div>
-          ${p ? `<div class="avance-tomo num" data-avance="${esc(l.slug)}">${p.fin ? 'Terminado' : 'En curso'}</div>` : ''}
+          ${p ? `<div class="avance-tomo num" data-avance="${esc(l.slug)}">${p.fin ? 'Terminado' : 'En curso'}</div>`
+            : esNuevo(l) ? '<div class="avance-tomo nuevo">Nuevo</div>' : ''}
           <div class="estado ${e.clase}"><span class="punto"></span>${esc(e.texto)}</div>
         </a>`
     }).join('')
