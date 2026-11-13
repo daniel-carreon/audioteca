@@ -406,6 +406,10 @@ export function montarLector({ texto, barra, volver, cap, vinculado, altoPanel, 
   }
   const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(recolocar) : null
   ro?.observe(texto)
+  // El panel también cambia la zona de lectura: plegarlo o desplegarlo (11 nov) mueve la banda, y en horizontal el
+  // texto no cambia de alto (su relleno inferior lo fija 58dvh), así que hay que observarlo a él.
+  const panelEl = document.querySelector('body > .panel')
+  if (panelEl) ro?.observe(panelEl)
   quitar.push(() => ro?.disconnect())
 
   escuchar(document, 'visibilitychange', () => {

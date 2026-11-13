@@ -617,7 +617,10 @@ async function vistaLector(slug, n, mio) {
 function construirPanel(libro, cap, vinculado) {
   const el = h(`
     <section class="panel titanio" aria-label="Reproductor">
-      <div class="panel-interior">
+      <button class="asa" data-accion="plegar" aria-controls="panel-controles" aria-expanded="true" aria-label="Plegar el reproductor">
+        <span class="tirador" aria-hidden="true"></span><span class="flecha" aria-hidden="true">${icono.abajo}</span></button>
+      <div class="hilo-panel" aria-hidden="true"><i></i></div>
+      <div class="panel-interior" id="panel-controles">
         <div class="avance" role="slider" aria-label="Posición" tabindex="0"><div class="riel"><div class="cargado"></div><div class="lleno"></div><div class="perilla"></div></div></div>
         <div class="tiempos num"><span data-t="actual">0:00</span><span data-t="capitulo"></span><span data-t="resto">-0:00</span></div>
         <div class="transporte">
@@ -632,6 +635,14 @@ function construirPanel(libro, cap, vinculado) {
             ${PRESETS.map((v) => `<button class="chip num" data-vel="${v}">${velTexto(v)}</button>`).join('')}
             <button class="chip num mas" data-accion="vel-hoja" aria-label="Más velocidades">···</button>
           </div>
+        </div>
+        <div class="compacto">
+          <button class="play-redondo" data-accion="play" aria-label="Reproducir">${icono.play}</button>
+          <button class="compacto-info" data-accion="desplegar" aria-label="Desplegar el reproductor">
+            <b class="num" data-t="resto-c">-0:00</b><span data-t="cap-c">${esc(cap.titulo)}</span></button>
+          <button class="chip num" data-accion="vel-hoja" data-t="vel-c" aria-label="Velocidad">1×</button>
+          <button class="boton-icono salto" data-accion="atras" aria-label="Atrás 15 segundos">${icono.menos15}<small>15</small></button>
+          <button class="boton-icono salto" data-accion="adelante" aria-label="Adelante 30 segundos">${icono.mas30}<small>30</small></button>
         </div>
       </div>
     </section>`)
@@ -649,6 +660,8 @@ function construirPanel(libro, cap, vinculado) {
     $('.perilla').style.left = `${f * 100}%`
     $('[data-t="actual"]').textContent = reloj(actual)
     $('[data-t="resto"]').textContent = `-${reloj(Math.max(0, dur - actual) / R.velocidad())}`
+    $('[data-t="resto-c"]').textContent = `-${reloj(Math.max(0, dur - actual) / R.velocidad())}`
+    $('.hilo-panel i').style.width = `${f * 100}%`
     $('[data-t="capitulo"]').textContent = v && t.restoLibro ? `${duracionHumana(t.restoLibro)} ${libro.narrados < libro.capitulos.length ? 'narrados por oír' : 'del libro'}` : ''
     avance.setAttribute('aria-valuenow', Math.round(actual))
     avance.setAttribute('aria-valuemax', Math.round(dur))
@@ -657,8 +670,10 @@ function construirPanel(libro, cap, vinculado) {
   }
   const pintarEstado = () => {
     const sonando = vinculado() && !R.elemento.paused
-    $('[data-accion="play"]').innerHTML = sonando ? icono.pausa : icono.play
-    $('[data-accion="play"]').setAttribute('aria-label', sonando ? 'Pausa' : 'Reproducir')
+    for (const b of el.querySelectorAll('[data-accion="play"]')) {
+      b.innerHTML = sonando ? icono.pausa : icono.play
+      b.setAttribute('aria-label', sonando ? 'Pausa' : 'Reproducir')
+    }
     $('[data-accion="anterior"]').disabled = !libro.capitulos.some((c) => c.audio && c.n < cap.n) && !vinculado()
     $('[data-accion="siguiente"]').disabled = !libro.capitulos.some((c) => c.audio && c.n > cap.n)
   }
@@ -670,6 +685,7 @@ function construirPanel(libro, cap, vinculado) {
     const mas = $('[data-accion="vel-hoja"]')
     mas.classList.toggle('on', otra)
     mas.textContent = otra ? velTexto(v) : '···'
+    $('[data-t="vel-c"]').textContent = velTexto(v)
   }
   const velocidadDeLibro = () => { const p = progreso(libro.slug); return p?.vel || prefs().ultimaVel }
   const asegurar = async () => {
@@ -695,8 +711,56 @@ function construirPanel(libro, cap, vinculado) {
         else { const s = libro.capitulos.find((c) => c.audio && c.n > cap.n); if (s) ir(`#/leer/${encodeURIComponent(libro.slug)}/${s.nn}`) }
         break
       case 'vel-hoja': hojaVelocidad(async () => { if (!vinculado()) await R.cargar(libro.slug, cap.n).catch(() => {}) }); break
+      case 'plegar': if (!asa.arrastro) plegar(!el.classList.contains('plegado')); break
+      case 'desplegar': plegar(false); break
     }
   })
+
+  // ── Plegar el panel: un asa que lo baja hasta el fondo para ahorrar espacio.
+  // Como el mini reproductor de Apple Music: el asa de arriba pliega/despliega con un toque o arrastrándola, y plegado
+  // queda una barra con play, lo que resta, la velocidad y ±15/30. Se recuerda por orientación: en horizontal el alto
+  // es lo que falta, así que ahí arranca plegado.
+  const asa = $('.asa')
+  const horizontal = matchMedia('(orientation: landscape)')
+  const llave = () => (horizontal.matches ? 'paisaje' : 'retrato')
+  const plegadoGuardado = () => { const g = prefs().panelPlegado || {}; return g[llave()] ?? llave() === 'paisaje' }
+  let animandoAlto = false
+  const aplicar = (plegado, animar) => {
+    if (el.classList.contains('plegado') === plegado) return
+    const antes = el.offsetHeight
+    el.classList.toggle('plegado', plegado)
+    asa.setAttribute('aria-expanded', String(!plegado))
+    asa.setAttribute('aria-label', plegado ? 'Desplegar el reproductor' : 'Plegar el reproductor')
+    asa.querySelector('.flecha').style.transform = plegado ? 'rotate(180deg)' : ''
+    const despues = el.offsetHeight
+    if (!animar || matchMedia('(prefers-reduced-motion: reduce)').matches || typeof el.animate !== 'function') return requestAnimationFrame(() => medir())
+    // El alto se anima de una vez y el texto se acomoda al final (si no, el lector re-centraría cada cuadro).
+    animandoAlto = true
+    const a = el.animate([{ height: `${antes}px` }, { height: `${despues}px` }], { duration: 240, easing: 'cubic-bezier(.2,.8,.2,1)' })
+    el.style.overflow = 'hidden'
+    a.onfinish = a.oncancel = () => { el.style.overflow = ''; animandoAlto = false; medir() }
+  }
+  const plegar = (plegado) => {
+    aplicar(plegado, true)
+    guardarPref('panelPlegado', { ...(prefs().panelPlegado || {}), [llave()]: plegado })
+  }
+  aplicar(plegadoGuardado(), false)
+  const alGirar = () => aplicar(plegadoGuardado(), false)
+  horizontal.addEventListener('change', alGirar)
+  // Arrastrar el asa: hacia abajo pliega, hacia arriba despliega (el toque solo lo resuelve el click).
+  let yAsa = null
+  asa.addEventListener('pointerdown', (ev) => { yAsa = ev.clientY; asa.arrastro = false; asa.setPointerCapture(ev.pointerId) })
+  asa.addEventListener('pointermove', (ev) => {
+    if (yAsa === null) return
+    const dy = ev.clientY - yAsa
+    if (Math.abs(dy) < 24) return
+    asa.arrastro = true
+    yAsa = null
+    plegar(dy > 0)
+  })
+  const soltarAsa = () => { yAsa = null; setTimeout(() => { asa.arrastro = false }, 0) }
+  asa.addEventListener('pointerup', soltarAsa)
+  asa.addEventListener('pointercancel', soltarAsa)
 
   // Arrastrar la barra: se previsualiza el tiempo y se busca al soltar.
   const fraccionDeEvento = (ev) => { const r = avance.getBoundingClientRect(); return Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width)) }
@@ -720,7 +784,7 @@ function construirPanel(libro, cap, vinculado) {
   avance.addEventListener('pointercancel', soltar)
   avance.addEventListener('keydown', (ev) => { if (ev.key === 'ArrowLeft') R.atras(); if (ev.key === 'ArrowRight') R.adelante() })
 
-  const medir = () => document.documentElement.style.setProperty('--panel-alto', `${el.offsetHeight}px`)
+  const medir = () => { if (!animandoAlto) document.documentElement.style.setProperty('--panel-alto', `${el.offsetHeight}px`) }
   requestAnimationFrame(medir)
   const ro = new ResizeObserver(medir)
   ro.observe(el)
@@ -733,6 +797,7 @@ function construirPanel(libro, cap, vinculado) {
       R.on('tiempo', pintarTiempo), R.on('estado', () => { pintarEstado(); pintarTiempo() }), R.on('velocidad', () => { pintarVel(); pintarTiempo() }),
       R.on('capitulo', () => { pintarEstado(); pintarVel(); pintarTiempo() }),
       () => ro.disconnect(),
+      () => horizontal.removeEventListener('change', alGirar),
     ],
   }
 }

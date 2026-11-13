@@ -258,6 +258,31 @@ svg { display: block; }
 .panel { position: fixed; z-index: 8; left: 0; right: 0; bottom: 0; padding: 12px 18px calc(var(--abajo) + 12px);
   border-radius: 24px 24px 0 0; border-bottom: 0; }
 .panel-interior { max-width: 560px; margin: 0 auto; }
+/* Asa para plegar/desplegar (11 nov): toque o arrastre. Ancha para el dedo, discreta a la vista. */
+.panel { padding-top: 22px; }
+.panel .asa { position: absolute; top: 0; left: 50%; translate: -50% 0; width: 120px; height: 26px; display: flex; align-items: center;
+  justify-content: center; gap: 6px; touch-action: none; color: var(--tenue); }
+.panel .asa .tirador { margin: 0; width: 36px; }
+.panel .asa .flecha { display: inline-flex; transition: transform .24s ease; }
+.panel .asa .flecha svg { width: 16px; height: 16px; }
+.panel .asa:active .tirador { background: #ffffff55; }
+.hilo-panel { display: none; position: absolute; left: 24px; right: 24px; top: 24px; height: 3px; border-radius: 2px; background: #ffffff14; overflow: hidden; }
+.hilo-panel i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--oro-osc), var(--oro)); }
+.compacto { display: none; }
+/* Plegado: una barra. Play · lo que resta del capítulo · velocidad · ±15/30. */
+.panel.plegado { padding-top: 30px; }
+.panel.plegado::before { height: 28px; }
+.panel.plegado .avance, .panel.plegado .tiempos, .panel.plegado .transporte, .panel.plegado .extra { display: none; }
+.panel.plegado .hilo-panel { display: block; max-width: 512px; margin: 0 auto; }
+.panel.plegado .compacto { display: grid; grid-template-columns: auto 1fr auto auto auto; align-items: center; gap: 6px; }
+.compacto .play-redondo { width: 48px; height: 48px; }
+.compacto .play-redondo svg { width: 22px; height: 22px; }
+.compacto-info { min-width: 0; text-align: left; display: flex; flex-direction: column; gap: 1px; padding: 0 6px; height: 48px; justify-content: center; }
+.compacto-info b { font-size: 15px; font-weight: 600; }
+.compacto-info span { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.compacto .chip { height: 34px; padding: 0 10px; }
+.compacto .boton-icono { width: 44px; height: 44px; border-radius: 50%; color: var(--texto); }
+.compacto .boton-icono svg { width: 24px; height: 24px; }
 .tirador { display: block; width: 44px; height: 5px; border-radius: 3px; background: #ffffff2e; margin: -4px auto 10px; }
 .avance { position: relative; height: 28px; display: flex; align-items: center; touch-action: none; }
 .avance .riel { position: relative; width: 100%; height: 5px; border-radius: 3px; background: #ffffff1f; }
